@@ -21,6 +21,7 @@
 **Controls:** <br/>
 - WSAD for moving around <br/>
 - QE for zooming out / zooming in <br/>
+- Space for simulating incoming epochs (otherwise, the image configuration is paused in current epoch for closer inspection) <br/>
 - Z for spawning a random rectangle of randomly chosen active cells <br/>
 - Esc for closing the application <br/>
 
