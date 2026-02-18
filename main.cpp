@@ -1,5 +1,8 @@
 #include <iostream>
 #include <vector>
+#include <unordered_set>
+#include <utility>
+#include <random>
 
 #include <glew.h>
 #include <glfw3.h>
@@ -7,30 +10,17 @@
 #include <gtc/matrix_transform.hpp>
 #include <gtc/type_ptr.hpp>
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <time.h> 
-
 using namespace std;
 
 const double WINDOW_WIDTH = 1024.0;
 const double WINDOW_HEIGHT = 1024.0;
 
-const int DIM_X_BOARD = 256.0;
-const int DIM_Y_BOARD = 256.0;
+const double CONWAY_WAITING_TIME = 0.0125; // in seconds
 
-const double DIM_X_RECT = WINDOW_WIDTH / (1.0 * DIM_Y_BOARD);
-const double DIM_Y_RECT = WINDOW_HEIGHT / (1.0 * DIM_X_BOARD);
-
-bool matrix[DIM_X_BOARD][DIM_Y_BOARD];
-bool newMatrix[DIM_X_BOARD][DIM_Y_BOARD];
-
-const double WAITING_TIME = 0.0125; // in seconds
-
-double currentTimeConway = 0.0;
 double lastTimeConway = 0.0;
 
-const int HASH = 7;
+const int CELL_WIDTH = 10;
+const int CELL_HEIGHT = 10;
 
 const char* vertexShaderSource =
 "#version 330 core \n"
@@ -67,6 +57,164 @@ double currentTime;
 double previousTime;
 double deltaTime;
 
+const int dx[8] = { -1, -1, -1, 0, 0, 1, 1, 1 };
+const int dy[8] = { -1, 0, 1, -1, 1, -1, 0, 1 };
+
+struct PairHash
+{
+    size_t operator()(const pair<long long, long long>& p) const
+    {
+        auto hash0 = hash<long long>()(p.first);
+        auto hash1 = hash<long long>()(p.second);
+        return hash0 ^ (hash1 << 1ll);
+    }
+};
+
+unordered_set<pair<long long, long long>, PairHash> currentActiveCells;
+unordered_set<pair<long long, long long>, PairHash> nextActiveCells;
+
+unordered_set<pair<long long, long long>, PairHash> potentiallyActiveCells;
+unordered_set<pair<long long, long long>, PairHash> nextPotentiallyActiveCells;
+
+double cameraX = 0.0;
+double cameraY = 0.0;
+
+double cameraZoom = 1.0;
+
+const double CAMERA_X_SPEED = 100.0;
+const double CAMERA_Y_SPEED = 100.0;
+const double CAMERA_ZOOM_SPEED = 0.5;
+
+const double EPSILON_ZOOM = 0.0001;
+
+const int RANDOM_RECTANGLE_WIDTH = 25;
+const int RANDOM_RECTANGLE_HEIGHT = 25;
+const int RANDOM_RECTANGLE_PROBABILITY = 25;
+
+void initConway()
+{
+    currentActiveCells.clear();
+	potentiallyActiveCells.clear();
+
+    for (int i = 0; i < 100; ++i)
+        for (int j = 0; j < 100; ++j)
+			currentActiveCells.emplace(i, j);
+
+    for (pair<long long, long long> activeCell : currentActiveCells)
+    {
+        long long cellX = activeCell.first;
+        long long cellY = activeCell.second;
+
+        for (int i = 0; i < 8; ++i)
+        {
+            long long neighbourX = cellX + dx[i];
+            long long neighbourY = cellY + dy[i];
+
+			potentiallyActiveCells.emplace(neighbourX, neighbourY);
+        }
+    }
+}
+
+void Conway()
+{
+	nextActiveCells.clear();
+	nextPotentiallyActiveCells.clear();
+
+	nextActiveCells.reserve(currentActiveCells.size());
+	nextPotentiallyActiveCells.reserve(potentiallyActiveCells.size());
+
+	for (pair<long long, long long> activeCell : currentActiveCells)
+	{
+		long long cellX = activeCell.first;
+		long long cellY = activeCell.second;
+
+        int numActiveNeighbours = 0;
+		for (int i = 0; i < 8; ++i)
+		{
+			long long neighbourX = cellX + dx[i];
+			long long neighbourY = cellY + dy[i];
+
+			if (currentActiveCells.find({ neighbourX, neighbourY }) != currentActiveCells.end())
+				++numActiveNeighbours;
+		}
+        if (numActiveNeighbours == 2 || numActiveNeighbours == 3)
+        {
+            nextActiveCells.insert(activeCell);
+
+			for (int i = 0; i < 8; ++i)
+			{
+				long long neighbourX = cellX + dx[i];
+				long long neighbourY = cellY + dy[i];
+
+				nextPotentiallyActiveCells.emplace(neighbourX, neighbourY);
+			}
+        }
+	}
+
+	for (pair<long long, long long> activeCell : potentiallyActiveCells)
+	{
+		long long cellX = activeCell.first;
+		long long cellY = activeCell.second;
+
+		if (currentActiveCells.find({ cellX, cellY }) != currentActiveCells.end())
+			continue;
+
+		int numActiveNeighbours = 0;
+		for (int i = 0; i < 8; ++i)
+		{
+			long long neighbourX = cellX + dx[i];
+			long long neighbourY = cellY + dy[i];
+
+			if (currentActiveCells.find({ neighbourX, neighbourY }) != currentActiveCells.end())
+				++numActiveNeighbours;
+		}
+        if (numActiveNeighbours == 3)
+        {
+            nextActiveCells.insert(activeCell);
+
+            for (int i = 0; i < 8; ++i)
+            {
+                long long neighbourX = cellX + dx[i];
+                long long neighbourY = cellY + dy[i];
+
+				nextPotentiallyActiveCells.emplace(neighbourX, neighbourY);
+            }
+        }
+	}
+
+    currentActiveCells = nextActiveCells;
+	potentiallyActiveCells = nextPotentiallyActiveCells;
+}
+
+void addActiveCellsInRectangle()
+{
+    static std::random_device random_device;
+	static std::mt19937 generator(random_device());
+    std::uniform_int_distribution<> uniformDistribution(0, RANDOM_RECTANGLE_PROBABILITY);
+
+	for (int i = -RANDOM_RECTANGLE_WIDTH / 2; i < RANDOM_RECTANGLE_WIDTH / 2; ++i)
+    {
+		for (int j = -RANDOM_RECTANGLE_HEIGHT / 2; j < RANDOM_RECTANGLE_HEIGHT / 2; ++j)
+        {
+			if (uniformDistribution(generator) == RANDOM_RECTANGLE_PROBABILITY)
+			{
+				long long cellX = (long long)cameraX + i;
+				long long cellY = (long long)cameraY + j;
+
+				currentActiveCells.emplace(cellX, cellY);
+
+				for (int k = 0; k < 8; ++k)
+				{
+					long long neighbourX = cellX + dx[k];
+					long long neighbourY = cellY + dy[k];
+
+					potentiallyActiveCells.emplace(neighbourX, neighbourY);
+				}
+			}
+        }
+    }
+}
+
 void updateDeltaTime()
 {
     currentTime = glfwGetTime();
@@ -78,6 +226,39 @@ void handleInput(GLFWwindow* window)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
+
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+    {
+        if (currentTime - lastTimeConway >= CONWAY_WAITING_TIME)
+        {
+            lastTimeConway = currentTime;
+            Conway();
+        }
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+        cameraY += CAMERA_Y_SPEED * deltaTime;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        cameraY -= CAMERA_Y_SPEED * deltaTime;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        cameraX -= CAMERA_X_SPEED * deltaTime;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+        cameraX += CAMERA_X_SPEED * deltaTime;
+
+    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS)
+    {
+        cameraZoom -= CAMERA_ZOOM_SPEED * deltaTime;
+		cameraZoom = max(cameraZoom, EPSILON_ZOOM);
+    }
+    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS)
+    {
+        cameraZoom += CAMERA_ZOOM_SPEED * deltaTime;
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS)
+    {
+        addActiveCellsInRectangle();
+    }
 }
 
 vector<double> vertices;
@@ -91,7 +272,7 @@ vector<double> vertices;
 (x2, y2) up-right
 */
 
-void drawRectangle(double x1, double y1, double x2, double y2)
+void addRectangleToDrawings(double x1, double y1, double x2, double y2)
 {
     vertices.emplace_back(x1);
     vertices.emplace_back(y1);
@@ -118,19 +299,22 @@ void draw()
 {
     vertices.clear();
 
-    for (int i = 0; i < DIM_X_BOARD; i++)
-    {
-        for (int j = 0; j < DIM_Y_BOARD; j++)
-        {
-            if (matrix[i][j])
-            {
-                int x = j;
-                int y = (DIM_X_BOARD - 1) - i;
+	for (pair<long long, long long> activeCell : currentActiveCells)
+	{
+		long long cellX = activeCell.first;
+		long long cellY = activeCell.second;
 
-                drawRectangle((2.0 * x * DIM_X_RECT - WINDOW_WIDTH) / 2.0, (2.0 * y * DIM_Y_RECT - WINDOW_HEIGHT) / 2.0, (2.0 * (x + 1) * DIM_X_RECT - WINDOW_WIDTH) / 2.0, (2.0 * (y + 1) * DIM_Y_RECT - WINDOW_HEIGHT) / 2.0);
-            }
-        }
-    }
+		double relativeCellX = cellX - cameraX;
+		double relativeCellY = cellY - cameraY;
+
+        double finalCellWidth = CELL_WIDTH * cameraZoom;
+        double finalCellHeight = CELL_HEIGHT * cameraZoom;
+
+        double finalCellX = relativeCellX * finalCellWidth;
+		double finalCellY = relativeCellY * finalCellHeight;
+
+		addRectangleToDrawings(finalCellX - finalCellWidth / 2.0, finalCellY - finalCellHeight / 2.0, finalCellX + finalCellWidth / 2.0, finalCellY + finalCellHeight / 2.0);
+	}
 
     if (vertices.size() > 0)
     {
@@ -142,54 +326,8 @@ void draw()
     }
 }
 
-void initMatrix()
-{
-    for (int i = 0; i < DIM_X_BOARD; i++)
-        for (int j = 0; j < DIM_Y_BOARD; j++)
-            matrix[i][j] = (rand() % HASH == 0);
-}
-
-void Conway()
-{
-    int dx[] = { 0, 0, -1, 1, 1, -1,  1, -1 };
-    int dy[] = { -1, 1,  0, 0, 1, -1, -1,  1 };
-
-    for (int i = 0; i < DIM_X_BOARD; i++)
-        for (int j = 0; j < DIM_Y_BOARD; j++)
-            newMatrix[i][j] = false;
-
-    for (int i = 1; i < DIM_X_BOARD - 1; i++)
-    {
-        for (int j = 1; j < DIM_Y_BOARD - 1; j++)
-        {
-            int num = 0;
-
-            for (int k = 0; k < 8; k++)
-                if (matrix[i + dx[k]][j + dy[k]])
-                    num++;
-
-            if (matrix[i][j])
-            {
-                if (num == 2 || num == 3)
-                    newMatrix[i][j] = true;
-            }
-            else
-            {
-                if (num == 3)
-                    newMatrix[i][j] = true;
-            }
-        }
-    }
-
-    for (int i = 0; i < DIM_X_BOARD; i++)
-        for (int j = 0; j < DIM_Y_BOARD; j++)
-            matrix[i][j] = newMatrix[i][j];
-}
-
 int main()
 {
-    srand(time(NULL));
-
     glfwInit();
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -197,7 +335,7 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     GLFWwindow* window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "John Conway's Game of Life", 0, 0);
-    //glfwGetPrimaryMonitor();
+    // glfwGetPrimaryMonitor();
 
     glfwMakeContextCurrent(window);
 
@@ -236,7 +374,7 @@ int main()
     glm::mat4 ortho = glm::ortho(-0.5 * WINDOW_WIDTH, 0.5 * WINDOW_WIDTH, -0.5 * WINDOW_HEIGHT, 0.5 * WINDOW_HEIGHT);
     glUniformMatrix4fv(orthoPath, 1, GL_FALSE, glm::value_ptr(ortho));
 
-    initMatrix();
+	initConway();
 
     while (!glfwWindowShouldClose(window))
     {
@@ -246,13 +384,6 @@ int main()
         glClear(GL_COLOR_BUFFER_BIT);
 
         handleInput(window);
-
-        currentTimeConway = glfwGetTime();
-        if (currentTimeConway - lastTimeConway > WAITING_TIME)
-        {
-            lastTimeConway = currentTimeConway;
-            Conway();
-        }
 
         draw();
 
